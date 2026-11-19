@@ -1,0 +1,39 @@
+name: rider_app
+description: "BD QuickMart rider mobile app - accept deliveries, navigate routes and track earnings."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # Routing
+  go_router: ^14.6.2
+
+  # State management
+  provider: ^6.1.5
+
+  # Persistence: secure token store + lightweight settings
+  flutter_secure_storage: ^9.2.2
+  shared_preferences: ^2.5.5
+
+  # Networking
+  dio: ^5.7.0
+
+  # Utilities
+  logger: ^2.5.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/

@@ -1,0 +1,180 @@
+# =====================================================================
+# BD QuickMart backend — runtime configuration
+# ---------------------------------------------------------------------
+# Database: Supabase PostgreSQL. The schema is owned by versioned Flyway
+# migrations (backend/src/main/resources/db/migration) that are executed as a
+# SEPARATE step with dedicated DDL-capable credentials. The runtime process
+# connects with a least-privilege role (DML only) and must NOT run migrations.
+#
+# Every connection value is supplied through environment variables; NO
+# credential is committed here. See docs/development/environment-variables.md
+# and docs/development/local-setup.md.
+# =====================================================================
+spring:
+  application:
+    name: bd-quickmart-backend
+
+  # Runtime datasource (least-privilege application role).
+  datasource:
+    # For Supabase, DB_URL must be the Session Pooler (or direct) JDBC URL with
+    # ?sslmode=require. The localhost default is only a harmless local-dev
+    # fallback; it is overridden by env in every real deployment.
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/postgres}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:}
+    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    hikari:
+      pool-name: bd-quickmart-pool
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT:5000}
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      # The backend must boot even while PostgreSQL is temporarily unavailable,
+      # so the pool does not fail fast on a missing database. Readiness
+      # (/actuator/health/readiness) reports real connectivity instead.
+      initialization-fail-timeout: ${DB_POOL_INIT_FAIL_TIMEOUT:-1}
+
+  jpa:
+    # Schema ownership belongs to Flyway (applied out-of-band), never Hibernate.
+    # `none` keeps startup independent of a live DB connection; set
+    # DB_DDL_AUTO=validate in staging/CI to assert entity/schema alignment.
+    hibernate:
+      ddl-auto: ${DB_DDL_AUTO:none}
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+        # Pinned so the context can be built without a live DB connection:
+        # Hibernate would otherwise try to read dialect metadata over JDBC.
+        dialect: ${DB_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+        # java.time.Instant values are bound/read in UTC; TIMESTAMPTZ columns
+        # store the same absolute instants. Presentation renders Asia/Dhaka.
+        jdbc:
+          time_zone: UTC
+    show-sql: ${DB_SHOW_SQL:false}
+
+  # Flyway is DISABLED in the running application by default. Migrations are
+  # applied with `mvn flyway:migrate` (or the optional in-app path below) using
+  # DB_MIGRATION_* credentials — a role with schema DDL privileges. Running
+  # Flyway at app startup would (a) force DDL rights onto the runtime role and
+  # (b) block startup whenever Supabase is unavailable; both are avoided here.
+  # If SPRING_FLYWAY_ENABLED=true is set intentionally, DB_MIGRATION_URL/
+  # USERNAME/PASSWORD MUST be provided so Flyway never uses the runtime role.
+  flyway:
+    enabled: ${SPRING_FLYWAY_ENABLED:false}
+    url: ${DB_MIGRATION_URL:}
+    user: ${DB_MIGRATION_USERNAME:}
+    password: ${DB_MIGRATION_PASSWORD:}
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+      fail-on-empty-beans: false
+    # Presentation timezone only. Instant values (all audit/token timestamps)
+    # are serialized as ISO-8601 UTC regardless of this setting.
+    time-zone: Asia/Dhaka
+
+server:
+  # Render injects PORT. Honour it first, then the local SERVER_PORT, then a
+  # safe local default of 8080.
+  port: ${PORT:${SERVER_PORT:8080}}
+  servlet:
+    context-path: ${SERVER_CONTEXT_PATH:/}
+  error:
+    include-message: always
+    include-binding-errors: always
+  shutdown: graceful
+
+app:
+  api:
+    version: ${APP_API_VERSION:v1}
+    base-path: ${APP_API_BASE_PATH:/api}
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+  ai:
+    # Keys are never committed. Supply them through the environment.
+    gemini-api-key: ${GEMINI_API_KEY:}
+    groq-api-key: ${GROQ_API_KEY:}
+    chat-model: ${AI_CHAT_MODEL:gemini-2.5-flash}
+    embedding-model: ${AI_EMBEDDING_MODEL:text-embedding-004}
+    enabled: ${AI_ENABLED:false}
+  jwt:
+    # HS256 signing secret. Supply a Base64-encoded (or raw) value of at least
+    # 32 bytes through the environment. No secret is ever committed. When left
+    # blank the application refuses to start outside test/dev profiles.
+    secret: ${JWT_SECRET:}
+    issuer: ${JWT_ISSUER:bd-quickmart-backend}
+    # Access / refresh lifetimes, in seconds.
+    access-expiration: ${JWT_ACCESS_EXPIRATION:900}
+    refresh-expiration: ${JWT_REFRESH_EXPIRATION:604800}
+    # Emergency local-development escape hatch. Never enable in production:
+    # the generated key is ephemeral and invalidates every token on restart.
+    allow-ephemeral-dev-key: ${JWT_ALLOW_EPHEMERAL_DEV_KEY:false}
+  bootstrap:
+    admin:
+      # Opt-in first-SUPER_ADMIN provisioning. Disabled by default; all fields
+      # are required when enabled. Disable again immediately after first use.
+      enabled: ${APP_BOOTSTRAP_ADMIN_ENABLED:false}
+      email: ${APP_BOOTSTRAP_ADMIN_EMAIL:}
+      password: ${APP_BOOTSTRAP_ADMIN_PASSWORD:}
+      full-name: ${APP_BOOTSTRAP_ADMIN_FULL_NAME:}
+      phone: ${APP_BOOTSTRAP_ADMIN_PHONE:}
+  # Public base URL advertised in the OpenAPI server list (no secret).
+  public-url: ${APP_PUBLIC_URL:http://localhost:8080}
+
+# ---------------------------------------------------------------------
+# Liveness vs readiness
+#   * /api/v1/health                    -> liveness (always 200 while the app
+#                                          is up; never fails on a DB outage).
+#   * /actuator/health/liveness        -> liveness (livenessState only; the db
+#                                          indicator is deliberately excluded).
+#   * /actuator/health/readiness       -> readiness (readinessState + db;
+#                                          returns 503 when PostgreSQL is down).
+# ---------------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db
+  info:
+    env:
+      enabled: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+
+logging:
+  level:
+    root: INFO
+    com.bdquickmart: ${LOG_LEVEL_BACKEND:INFO}
+    org.hibernate.SQL: ${LOG_LEVEL_SQL:INFO}
+    org.springframework.web: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} [trace=%X{traceId:-}] - %msg%n"
+  file:
+    name: ${LOG_FILE:logs/bd-quickmart-backend.log}
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 7
